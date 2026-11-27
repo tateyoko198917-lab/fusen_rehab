@@ -3,43 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ふうせんリハ v1.3</title>
-<!-- ふうせんリハ バージョン 1.3 (2026-11-27) 完全オフライン動作 / カメラの動きで風船を割る -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>ふうせんリハ v1.6</title>
+<!-- ふうせんリハ バージョン 1.6 (2026-11-27) 外部通信なし(映像は端末内のみで処理) / 鏡モード + タッチモード / たまに違う音 -->
 <style>
-  html,body{margin:0;height:100%;background:#111;font-family:sans-serif;overflow:hidden}
-  canvas{position:fixed;inset:0;width:100%;height:100%}
-  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff8e1;z-index:5;text-align:center;padding:16px;box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#111;font-family:sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+  canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff8e1;z-index:5;text-align:center;padding:16px;box-sizing:border-box;overflow:auto}
   #start h1{font-size:40px;margin:0 0 8px}
-  #start button{font-size:32px;padding:20px 48px;border:0;border-radius:40px;background:#ff7043;color:#fff;margin-top:20px}
+  #start button{font-size:32px;padding:20px 48px;border:0;border-radius:40px;background:#ff7043;color:#fff;margin-top:16px}
   #start p{margin:4px;color:#555}
+  .opt{background:#fff;border-radius:12px;padding:10px 16px;margin:8px;text-align:left;font-size:17px;max-width:520px}
+  .opt b{display:block;margin-bottom:4px}
+  .opt label{display:block;margin:6px 0}
+  .opt input{transform:scale(1.3);margin-right:8px}
   #err{color:#c62828;font-weight:bold;white-space:pre-line;margin-top:12px;max-width:520px}
   #gear{position:fixed;top:8px;right:8px;z-index:4;font-size:26px;background:#fff9;border:0;border-radius:50%;width:48px;height:48px}
-  #panel{position:fixed;top:60px;right:8px;z-index:4;background:#fffe;border-radius:12px;padding:12px 16px;display:none;width:260px;font-size:14px}
+  #panel{position:fixed;top:60px;right:8px;z-index:4;background:#fffe;border-radius:12px;padding:12px 16px;display:none;width:270px;font-size:14px;max-height:85%;overflow:auto}
   #panel label{display:block;margin:8px 0 2px}
   #panel input[type=range]{width:100%}
+  #panel button{margin-top:8px;font-size:14px;padding:6px 10px}
   #score{position:fixed;top:8px;left:12px;z-index:3;color:#fff;font-size:36px;font-weight:bold;text-shadow:0 2px 6px #000}
   #ver{position:fixed;bottom:4px;left:8px;color:#fff8;font-size:11px;z-index:3}
+  #calib{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;background:#000c;color:#fff;border-radius:16px;padding:14px 20px;display:none;text-align:center;font-size:18px;max-width:70%}
+  #calib button{font-size:16px;padding:8px 14px;margin:8px 4px 0;border:0;border-radius:20px}
 </style>
 </head>
 <body>
 <canvas id="cv"></canvas>
 <div id="score">0</div>
-<div id="ver">ふうせんリハ v1.3</div>
-<button id="gear">⚙</button>
+<div id="ver">ふうせんリハ v1.6</div>
+<button id="gear" aria-label="設定">⚙</button>
 <div id="panel">
   <label>ふうせんの大きさ <span id="vSize"></span></label><input type="range" id="size" min="8" max="30" value="18">
   <label>同時に出る数 <span id="vNum"></span></label><input type="range" id="num" min="1" max="5" value="2">
   <label>反応しやすさ(右ほど敏感) <span id="vSens"></span></label><input type="range" id="sens" min="1" max="10" value="6">
   <label>次の風船が出るまでの間(秒) <span id="vWait"></span></label><input type="range" id="wait" min="0" max="5" value="1" step="0.5">
-  <label><input type="checkbox" id="showcam" checked> カメラ映像を表示</label>
-  <label><input type="checkbox" id="showmotion" checked> 動いた場所を光らせる</label>
+  <div id="mirrorOpts">
+    <label><input type="checkbox" id="showcam" checked> カメラ映像を表示</label>
+    <label><input type="checkbox" id="showmotion" checked> 動いた場所を光らせる</label>
+  </div>
   <label><input type="checkbox" id="sound" checked> 音</label>
-  <button id="reset" style="margin-top:8px">スコアをリセット</button>
+  <label>ちがう音が鳴る頻度
+    <select id="rare"><option value="0">なし(いつも同じ音)</option><option value="0.1">たまに</option><option value="0.25" selected>ときどき</option><option value="0.5">よく</option><option value="1">毎回ちがう音</option></select>
+  </label>
+  <button id="reset">スコアをリセット</button>
+  <button id="recal" style="display:none">位置合わせをやり直す</button>
+  <button id="home">最初の画面に戻る</button>
+</div>
+<div id="calib">
+  <div id="calibMsg"></div>
+  <button id="calibRedo">やり直す</button>
+  <button id="calibLast" style="display:none">前回の位置を使う</button>
 </div>
 <div id="start">
   <h1>🎈 ふうせんリハ</h1>
-  <p>からだのどこでも、動かすと風船が割れます</p>
-  <p>カメラの前に座って、風船のところで手や足を動かそう</p>
+  <div class="opt"><b>あそびかた</b>
+    <label><input type="radio" name="mode" value="mirror" checked>鏡モード(座ったまま、画面の自分を見て遊ぶ)</label>
+    <label><input type="radio" name="mode" value="touch">タッチモード(スクリーンの風船を手でさわる)</label>
+  </div>
+  <div class="opt"><b>カメラ</b>
+    <label><input type="radio" name="cam" value="user" checked>画面側のカメラ</label>
+    <label><input type="radio" name="cam" value="environment">背面のカメラ</label>
+  </div>
   <button id="go">はじめる</button>
   <div id="err"></div>
   <p style="margin-top:16px;font-size:12px">映像は外部に送信されず、この端末内だけで処理されます</p>
@@ -47,137 +74,258 @@
 <script>
 (function(){
 "use strict";
-const VERSION="1.3";
+const VERSION="1.6";
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
-const small=document.createElement("canvas");
-const sctx=small.getContext("2d",{willReadFrequently:true});
 const video=document.createElement("video"); video.playsInline=true; video.muted=true;
-video.setAttribute("playsinline",""); // iOS Safari 用
+video.setAttribute("playsinline","");
 const $=id=>document.getElementById(id);
-const SW=80; let SH=60;               // 検出用グリッド(縦は画面比に合わせて変える)
-let W=0,H=0, prev=null, motion=new Uint8Array(SW*SH);
-let balloons=[], particles=[], score=0, running=false, audio=null;
-let spawnQueue=[];                     // 割れた風船ごとの補充予定時刻(v1.3: 個別タイマー)
-let lastSpawnAt=-1e9, lastT=0, lastDetT=0, frameReady=true, stream=null;
-const POP_MS=120;                      // 風船の中でこの時間(ミリ秒)動き続けたら割れる
 const num=id=>parseFloat($(id).value);
+const POP_MS=120;                 // 風船の中でこの時間(ミリ秒)動き続けたら割れる
+const CALIB_KEY="fusenrehab_calib_v2";   // v1.6: カメラ・画面向き・映像比も保存
+
+// ---- 状態 ----
+let mode="mirror", facing="user", mirrorView=true;
+let W=0,H=0, running=false, audio=null, stream=null;
+let balloons=[], particles=[], score=0, spawnQueue=[];
+let lastSpawnAt=-1e9, lastT=0, lastDetT=0, frameReady=true, suppressUntil=0;
+let calibrating=false, calibPts=[], calibRect=[0,0,1,1], Hm=null;
+
+// 動き検出用グリッド(鏡モード=画面比、タッチモード=カメラ比)
+function makeGrid(w,h){ const c=document.createElement("canvas"); c.width=w; c.height=h;
+  return {w:w,h:h,c:c,x:c.getContext("2d",{willReadFrequently:true}),prev:null,mot:new Uint8Array(w*h)}; }
+let GM=makeGrid(80,60), GT=makeGrid(160,120);
 
 // ---- 画面サイズ ----
 function resize(){
   W=cv.width=innerWidth; H=cv.height=innerHeight;
-  SH=Math.max(20,Math.min(200,Math.round(SW*H/W)));   // 画面と同じ縦横比の検出グリッド
-  small.width=SW; small.height=SH;
-  motion=new Uint8Array(SW*SH); prev=null;
+  GM=makeGrid(80,Math.max(20,Math.min(200,Math.round(80*H/W))));
   balloons=[]; spawnQueue=[]; particles=[];
+  if(calibrating){ calibPts=[]; calibMsg(); }   // 位置合わせ中に回転したら最初から
 }
-addEventListener("resize",resize); resize();
+addEventListener("resize",resize);
+resize();
 
-// ---- 映像を画面比に合わせて中央切り抜き(引き伸ばし防止) ----
+// ---- 鏡モード: 映像を画面比に合わせて中央切り抜き ----
 function cropRect(){
-  const vw=video.videoWidth, vh=video.videoHeight;
-  const a=W/H, va=vw/vh;
+  const vw=video.videoWidth, vh=video.videoHeight, a=W/H, va=vw/vh;
   if(va>a){ const cw=vh*a; return [(vw-cw)/2,0,cw,vh]; }
   const ch=vw/a; return [0,(vh-ch)/2,vw,ch];
 }
 
-// ---- 設定表示 ----
+// ---- 設定パネル ----
 function upd(){ $("vSize").textContent=$("size").value; $("vNum").textContent=$("num").value; $("vSens").textContent=$("sens").value; $("vWait").textContent=$("wait").value; }
 ["size","num","sens","wait"].forEach(i=>$(i).addEventListener("input",upd)); upd();
 $("size").addEventListener("change",()=>{ balloons=[]; spawnQueue=[]; particles=[]; });
-cv.addEventListener("pointerdown",()=>{ $("panel").style.display="none"; });
+function panelOpen(){ return $("panel").style.display==="block"; }
+$("gear").onclick=()=>{ $("panel").style.display=panelOpen()?"none":"block"; };
 addEventListener("keydown",e=>{ if(e.key==="Escape") $("panel").style.display="none"; });
-$("gear").onclick=()=>{ const p=$("panel"); p.style.display=p.style.display==="block"?"none":"block"; };
 $("reset").onclick=()=>{ score=0; $("score").textContent=score; };
+$("recal").onclick=()=>{ $("panel").style.display="none"; startCalib(); };
+$("home").onclick=()=>{ running=false; calibrating=false; stopCam(); $("panel").style.display="none"; $("calib").style.display="none"; $("start").style.display="flex"; };
 
 // ---- 音 ----
+function tone(f,st,dur,type,vol,f2){   // 1音を鳴らす(f2を指定すると音程がすべる)
+  const o=audio.createOscillator(), g=audio.createGain();
+  o.type=type; o.frequency.setValueAtTime(f,st);
+  if(f2) o.frequency.exponentialRampToValueAtTime(f2,st+dur);
+  g.gain.setValueAtTime(vol,st); g.gain.exponentialRampToValueAtTime(0.001,st+dur);
+  o.connect(g); g.connect(audio.destination);
+  o.onended=()=>{ o.disconnect(); g.disconnect(); };
+  o.start(st); o.stop(st+dur+0.05);
+}
+// いつもの音
+function sNormal(t){ [660,880,1175].forEach((f,i)=>tone(f,t+i*0.07,0.25,"sine",0.15)); }
+// たまに鳴る音(ランダムに1つ)
+const SPECIAL=[
+  t=>{ [523,659,784,1047].forEach((f,i)=>tone(f,t+i*0.12,i===3?0.6:0.15,"square",0.07)); },          // ファンファーレ
+  t=>{ tone(700,t,0.45,"sine",0.25,120); },                                                            // びよーん
+  t=>{ tone(300,t,0.35,"sine",0.18,1800); },                                                           // ひゅーっ(上がる)
+  t=>{ for(let i=0;i<6;i++) tone(i%2?1319:1047,t+i*0.06,0.08,"triangle",0.12); }, // ピロピロ
+  t=>{ tone(180,t,0.25,"triangle",0.35,60); tone(180,t+0.25,0.25,"triangle",0.35,60); },              // ぽんぽん
+  t=>{ [784,659,523,659,784,1047].forEach((f,i)=>tone(f,t+i*0.09,0.18,"sine",0.15)); },                // メロディ
+  t=>{ for(let i=0;i<8;i++) tone(400+i*120,t+i*0.04,0.12,"sawtooth",0.05); tone(1500,t+0.35,0.5,"sine",0.12); } // キラーン
+];
+let lastSpecial=-1;
 function beep(){
   if(!$("sound").checked||!audio) return;
   if(audio.state==="suspended") audio.resume().catch(()=>{});
-  const t=audio.currentTime;
-  [660,880,1175].forEach((f,i)=>{
-    const o=audio.createOscillator(), g=audio.createGain();
-    o.type="sine"; o.frequency.value=f; o.connect(g); g.connect(audio.destination);
-    g.gain.setValueAtTime(0.15,t+i*0.07); g.gain.exponentialRampToValueAtTime(0.001,t+i*0.07+0.25);
-    o.onended=()=>{ o.disconnect(); g.disconnect(); };
-    o.start(t+i*0.07); o.stop(t+i*0.07+0.3);
-  });
+  const t=audio.currentTime+0.01;
+  if(Math.random()<num("rare")){
+    let k; do{ k=Math.floor(Math.random()*SPECIAL.length); }while(k===lastSpecial && SPECIAL.length>1); // 同じ音が続かないように
+    lastSpecial=k; SPECIAL[k](t);
+  }else sNormal(t);
 }
 
 // ---- 風船 ----
 const COLORS=["#ef5350","#ffca28","#66bb6a","#42a5f5","#ab47bc","#ff7043"];
 function radius(){
-  // 紐を含めて画面に収まる大きさに制限
   const r=Math.min(W,H)*num("size")/100;
   return Math.max(10,Math.min(r, W/2.2, H/2.9));
 }
 function spawn(t){
   const r=radius();
-  const xr=Math.max(0,W-2*r), yr=Math.max(0,H-2*r-r*0.7);
-  for(const gap of [2.2,1.6,1.0]){        // 置けなければ間隔を少しずつ詰める
+  const mg=mode==="touch"?Math.min(W,H)*0.04:0;   // タッチモードは端の目印と重ならないよう少し内側
+  const xr=Math.max(0,W-2*r-2*mg), yr=Math.max(0,H-2*r-r*0.7-2*mg);
+  for(const gap of [2.2,1.6,1.0]){
     for(let k=0;k<30;k++){
-      const x=r+Math.random()*xr, y=r+Math.random()*yr;
+      const x=r+mg+Math.random()*xr, y=r+mg+Math.random()*yr;
       if(balloons.every(b=>Math.hypot(b.x-x,b.y-y)>r*gap)){
         balloons.push({x:x,y:y,r:r,c:COLORS[Math.floor(Math.random()*COLORS.length)],hit:0,ph:Math.random()*6.28,born:t});
         return true;
       }
     }
   }
-  return false; // それでも無理なら次のフレームで再挑戦
+  return false;
 }
-function pop(b){
+function pop(b,t){
   for(let i=0;i<28;i++){
     const a=Math.random()*6.28, s=2+Math.random()*7;
     particles.push({x:b.x,y:b.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,life:1,c:COLORS[Math.floor(Math.random()*COLORS.length)]});
   }
   score++; $("score").textContent=score; beep();
+  // タッチモードは紙吹雪をカメラが「動き」と誤認しないよう、しばらく判定を止める
+  if(mode==="touch") suppressUntil=t+900;
 }
-function bobY(b,t){ return b.y+Math.sin(t/600+b.ph)*b.r*0.08; }
+function bobY(b,t){ return mode==="touch"?b.y:b.y+Math.sin(t/600+b.ph)*b.r*0.08; } // タッチモードは揺らさない
 function drawBalloon(b,t){
   const yy=bobY(b,t);
   ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(b.x,yy+b.r); ctx.quadraticCurveTo(b.x+b.r*0.2,yy+b.r*1.4,b.x,yy+b.r*1.7); ctx.stroke();
   const g=ctx.createRadialGradient(b.x-b.r*0.3,yy-b.r*0.3,b.r*0.1,b.x,yy,b.r);
   g.addColorStop(0,"#fff"); g.addColorStop(0.25,b.c); g.addColorStop(1,b.c);
   ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(b.x,yy,b.r*0.85,b.r,0,0,6.283); ctx.fill();
-  if(b.hit>0){ ctx.strokeStyle="#fff"; ctx.lineWidth=6; ctx.stroke(); }
+  if(b.hit>0 && mode==="mirror"){ ctx.strokeStyle="#fff"; ctx.lineWidth=6; ctx.stroke(); } // 白枠は鏡モードのみ(タッチでは誤反応の原因)
 }
 
-// ---- 動き検出 ----
-function detect(){
-  // v1.3: カメラ(30fps)より画面(60/120Hz)が速いと同じ映像を2回比べて「動きなし」になる問題の対策
-  if(!frameReady) return false;
-  if(typeof video.requestVideoFrameCallback==="function") frameReady=false;
-  const [cx,cy,cw,ch]=cropRect();
-  sctx.save(); sctx.translate(SW,0); sctx.scale(-1,1);
-  sctx.drawImage(video,cx,cy,cw,ch,0,0,SW,SH); sctx.restore();
-  const d=sctx.getImageData(0,0,SW,SH).data;
-  const gray=new Uint8Array(SW*SH);
-  for(let i=0;i<SW*SH;i++) gray[i]=(d[i*4]*0.3+d[i*4+1]*0.59+d[i*4+2]*0.11);
-  if(prev){ let same=true; for(let i=0;i<SW*SH;i++){ if(gray[i]!==prev[i]){ same=false; break; } } if(same) return false; }
-  const thr=44-num("sens")*3; // 敏感なほど小さい差で反応
-  if(prev) for(let i=0;i<SW*SH;i++) motion[i]=Math.abs(gray[i]-prev[i])>thr?1:0;
-  prev=gray;
-  // 画面全体の半分以上が動いた=カメラの明るさ補正や揺れとみなして無視(誤爆防止)
-  let cnt=0; for(let i=0;i<SW*SH;i++) cnt+=motion[i];
-  if(cnt>SW*SH*0.5) motion.fill(0);
+// ---- 動き検出(共通) ----
+function sampleGrid(G,src){   // src: [sx,sy,sw,sh] の範囲をグリッドに描く
+  G.x.save();
+  if(mode==="mirror" && mirrorView){ G.x.translate(G.w,0); G.x.scale(-1,1); }
+  G.x.drawImage(video,src[0],src[1],src[2],src[3],0,0,G.w,G.h); G.x.restore();
+  const d=G.x.getImageData(0,0,G.w,G.h).data, n=G.w*G.h, gray=new Uint8Array(n);
+  for(let i=0;i<n;i++) gray[i]=(d[i*4]*0.3+d[i*4+1]*0.59+d[i*4+2]*0.11);
+  if(G.prev){ let same=true; for(let i=0;i<n;i++){ if(gray[i]!==G.prev[i]){ same=false; break; } } if(same) return false; }
+  const thr=44-num("sens")*3;
+  if(G.prev) for(let i=0;i<n;i++) G.mot[i]=Math.abs(gray[i]-G.prev[i])>thr?1:0;
+  G.prev=gray;
+  let cnt=0; for(let i=0;i<n;i++) cnt+=G.mot[i];
+  if(cnt>n*0.5) G.mot.fill(0);   // 全体が変化=明るさ補正や揺れなので無視
   return true;
 }
+function detect(){
+  if(!frameReady) return false;
+  if(typeof video.requestVideoFrameCallback==="function") frameReady=false;
+  if(mode==="mirror") return sampleGrid(GM,cropRect());
+  return sampleGrid(GT,[0,0,video.videoWidth,video.videoHeight]);
+}
+function judge(b,t,dt,ratio){
+  const need=0.22-num("sens")*0.015;
+  const guard=mode==="touch"?700:500;
+  if(ratio>need && t-b.born>guard) b.hit+=dt; else b.hit=Math.max(0,b.hit-dt);
+  return b.hit>=POP_MS;
+}
 function checkHits(t,dt){
-  const need=0.22-num("sens")*0.015; // 風船内で動いた割合
-  const sx=SW/W, sy=SH/H;
   for(let i=balloons.length-1;i>=0;i--){
-    const b=balloons[i]; let tot=0,mv=0; const by=bobY(b,t), rx=b.r*0.85;
-    const x0=Math.max(0,Math.floor((b.x-rx)*sx)), x1=Math.min(SW-1,Math.ceil((b.x+rx)*sx));
-    const y0=Math.max(0,Math.floor((by-b.r)*sy)), y1=Math.min(SH-1,Math.ceil((by+b.r)*sy));
-    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
-      const dx=((x+0.5)/sx-b.x)/rx, dy=((y+0.5)/sy-by)/b.r;   // 描画と同じ楕円で判定
-      if(dx*dx+dy*dy<=1){ tot++; mv+=motion[y*SW+x]; }
+    const b=balloons[i], by=bobY(b,t), rx=b.r*0.85;
+    let tot=0,mv=0;
+    if(mode==="mirror"){
+      const sx=GM.w/W, sy=GM.h/H;
+      const x0=Math.max(0,Math.floor((b.x-rx)*sx)), x1=Math.min(GM.w-1,Math.ceil((b.x+rx)*sx));
+      const y0=Math.max(0,Math.floor((by-b.r)*sy)), y1=Math.min(GM.h-1,Math.ceil((by+b.r)*sy));
+      for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+        const dx=((x+0.5)/sx-b.x)/rx, dy=((y+0.5)/sy-by)/b.r;
+        if(dx*dx+dy*dy<=1){ tot++; mv+=GM.mot[y*GM.w+x]; }
+      }
+    }else{
+      // タッチモード: 風船内の点をスクリーン→カメラ座標に変換して調べる
+      for(let iy=-5;iy<=5;iy++)for(let ix=-5;ix<=5;ix++){
+        const dx=ix/5, dy=iy/5; if(dx*dx+dy*dy>1) continue;
+        const p=applyH(Hm,(b.x+dx*rx)/W,(by+dy*b.r)/H);
+        const gx=Math.floor(p[0]*GT.w), gy=Math.floor(p[1]*GT.h);
+        if(gx<0||gy<0||gx>=GT.w||gy>=GT.h) continue;
+        tot++; mv+=GT.mot[gy*GT.w+gx];
+      }
     }
-    if(tot>0 && mv/tot>need && t-b.born>500) b.hit+=dt; else b.hit=Math.max(0,b.hit-dt);   // 時間(ms)で積算
-    if(b.hit>=POP_MS){ pop(b); balloons.splice(i,1); spawnQueue.push(t+num("wait")*1000); }
+    if(judge(b,t,dt,tot>0?mv/tot:0)){ pop(b,t); balloons.splice(i,1); spawnQueue.push(t+num("wait")*1000); }
   }
 }
 
-// ---- 補充(時間は全て requestAnimationFrame の t に統一) ----
+// ---- 位置合わせ(ホモグラフィ: スクリーン座標→カメラ座標) ----
+function homography(src,dst){
+  const A=[],B=[];
+  for(let i=0;i<4;i++){ const x=src[i][0],y=src[i][1],u=dst[i][0],v=dst[i][1];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]); B.push(u);
+    A.push([0,0,0,x,y,1,-v*x,-v*y]); B.push(v); }
+  for(let c=0;c<8;c++){
+    let p=c; for(let r=c+1;r<8;r++) if(Math.abs(A[r][c])>Math.abs(A[p][c])) p=r;
+    if(Math.abs(A[p][c])<1e-10) return null;
+    [A[c],A[p]]=[A[p],A[c]]; [B[c],B[p]]=[B[p],B[c]];
+    for(let r=0;r<8;r++){ if(r===c) continue; const f=A[r][c]/A[c][c];
+      for(let k=c;k<8;k++) A[r][k]-=f*A[c][k]; B[r]-=f*B[c]; }
+  }
+  return B.map((v,i)=>v/A[i][i]);
+}
+function applyH(h,x,y){ const d=h[6]*x+h[7]*y+1; return [(h[0]*x+h[1]*y+h[2])/d,(h[3]*x+h[4]*y+h[5])/d]; }
+const MARK_COLORS=["#ff1744","#00e676","#2979ff","#ffea00"];
+function markPos(){ const m=Math.min(W,H)*0.07; return [[m,m],[W-m,m],[W-m,H-m],[m,H-m]]; }
+function calibCond(){   // 位置合わせが有効な条件(カメラ・画面の向き・映像の縦横比)
+  return {facing:facing, land:W>=H, va:Math.round((video.videoWidth/video.videoHeight)*100)};
+}
+function loadCalib(){
+  try{
+    const d=JSON.parse(localStorage.getItem(CALIB_KEY)||"null"); if(!d) return null;
+    const c=calibCond();
+    return (d.facing===c.facing && d.land===c.land && d.va===c.va)?d.h:null;   // 条件が違えば使わない
+  }catch(e){ return null; }
+}
+function saveCalib(h){ try{ const d=calibCond(); d.h=h; localStorage.setItem(CALIB_KEY,JSON.stringify(d)); }catch(e){} }
+function calibMsg(){
+  if(!calibrating) return;
+  const names=["① 赤(左上)","② 緑(右上)","③ 青(右下)","④ 黄(左下)"];
+  $("calibMsg").innerHTML="カメラ映像の中に写っている<br><b style='color:"+MARK_COLORS[calibPts.length]+"'>"+names[calibPts.length]+"</b> の丸をタップ<br><small>("+(calibPts.length+1)+"/4)</small>";
+}
+function startCalib(){
+  calibrating=true; calibPts=[]; balloons=[]; spawnQueue=[]; particles=[];
+  $("calibLast").style.display=loadCalib()?"inline-block":"none";
+  $("calib").style.display="block"; calibMsg();
+}
+function finishCalib(h){
+  Hm=h; calibrating=false; $("calib").style.display="none";
+  GT.prev=null; GT.mot.fill(0); suppressUntil=performance.now()+800;
+}
+$("calibRedo").onclick=e=>{ e.stopPropagation(); calibPts=[]; calibMsg(); };
+$("calibLast").onclick=e=>{ e.stopPropagation(); const h=loadCalib(); if(h) finishCalib(h); };
+cv.addEventListener("pointerdown",e=>{
+  if(panelOpen()){ $("panel").style.display="none"; return; }
+  if(!calibrating) return;
+  const r=calibRect, u=(e.clientX-r[0])/r[2], v=(e.clientY-r[1])/r[3];
+  if(u<0||v<0||u>1||v>1) return;
+  calibPts.push([u,v]);
+  if(calibPts.length<4){ calibMsg(); return; }
+  const src=markPos().map(p=>[p[0]/W,p[1]/H]);
+  const h=homography(src,calibPts);
+  if(!h){ calibPts=[]; $("calibMsg").innerHTML="うまく計算できませんでした。<br>もう一度①からタップしてください。"; return; }
+  saveCalib(h); finishCalib(h);
+});
+function drawCalib(){
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+  const vw=video.videoWidth, vh=video.videoHeight, s=Math.min(W/vw,H/vh);
+  const dw=vw*s, dh=vh*s, ox=(W-dw)/2, oy=(H-dh)/2;
+  calibRect=[ox,oy,dw,dh];
+  ctx.globalAlpha=0.8; ctx.drawImage(video,ox,oy,dw,dh); ctx.globalAlpha=1;
+  const m=Math.min(W,H)*0.07;
+  markPos().forEach((p,i)=>{
+    ctx.fillStyle=MARK_COLORS[i]; ctx.beginPath(); ctx.arc(p[0],p[1],m*0.75,0,6.283); ctx.fill();
+    ctx.fillStyle="#000"; ctx.font="bold "+Math.round(m*0.8)+"px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(String(i+1),p[0],p[1]);
+  });
+  calibPts.forEach((p,i)=>{
+    const x=ox+p[0]*dw, y=oy+p[1]*dh;
+    ctx.strokeStyle=MARK_COLORS[i]; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(x-16,y); ctx.lineTo(x+16,y); ctx.moveTo(x,y-16); ctx.lineTo(x,y+16); ctx.stroke();
+  });
+}
+
+// ---- 補充 ----
 function refill(t){
   const want=parseInt($("num").value,10);
   while(balloons.length>want) balloons.pop();
@@ -187,7 +335,7 @@ function refill(t){
   if(spawnQueue.length>0 && spawnQueue[0]<=t){
     if(spawn(t)){ spawnQueue.shift(); lastSpawnAt=t; }
   }else if(balloons.length+spawnQueue.length<want){
-    if(spawn(t)) lastSpawnAt=t;   // 初回や数を増やしたとき
+    if(spawn(t)) lastSpawnAt=t;
   }
 }
 
@@ -195,42 +343,52 @@ function refill(t){
 function loop(t){
   if(!running) return;
   const dt=Math.min(100,lastT?t-lastT:16.7); lastT=t;
+  const ready=video.readyState>=2 && video.videoWidth>0;
+  if(calibrating){ if(ready) drawCalib(); requestAnimationFrame(loop); return; }
   ctx.fillStyle="#222"; ctx.fillRect(0,0,W,H);
-  if(video.readyState>=2 && video.videoWidth>0){
-    if($("showcam").checked){
-      const [cx,cy,cw,ch]=cropRect();
-      ctx.save(); ctx.translate(W,0); ctx.scale(-1,1);
-      ctx.globalAlpha=0.55; ctx.drawImage(video,cx,cy,cw,ch,0,0,W,H); ctx.restore(); ctx.globalAlpha=1;
+  if(ready){
+    if(mode==="mirror" && $("showcam").checked){
+      const c=cropRect();
+      ctx.save(); if(mirrorView){ ctx.translate(W,0); ctx.scale(-1,1); }
+      ctx.globalAlpha=0.55; ctx.drawImage(video,c[0],c[1],c[2],c[3],0,0,W,H); ctx.restore(); ctx.globalAlpha=1;
     }
-    if(detect()){ checkHits(t,Math.min(200,lastDetT?t-lastDetT:33)); lastDetT=t; }
-    if($("showmotion").checked){
+    if(detect()){
+      // タッチモードは設定パネル表示中・紙吹雪中は判定しない
+      if(!(mode==="touch" && (t<suppressUntil || panelOpen()))) checkHits(t,Math.min(200,lastDetT?t-lastDetT:33));
+      lastDetT=t;
+    }
+    if(mode==="mirror" && $("showmotion").checked){
       ctx.fillStyle="rgba(255,255,120,0.35)";
-      const cw=W/SW, ch=H/SH;
-      for(let y=0;y<SH;y++)for(let x=0;x<SW;x++) if(motion[y*SW+x]) ctx.fillRect(x*cw,y*ch,cw+1,ch+1);
+      const cw=W/GM.w, ch=H/GM.h;
+      for(let y=0;y<GM.h;y++)for(let x=0;x<GM.w;x++) if(GM.mot[y*GM.w+x]) ctx.fillRect(x*cw,y*ch,cw+1,ch+1);
     }
-    refill(t);   // v1.3: 映像が出てから風船を出す
+    refill(t);
   }
   balloons.forEach(b=>drawBalloon(b,t));
+  const k=dt/16.7;
   particles=particles.filter(p=>p.life>0);
-  const k=dt/16.7;   // v1.3: 画面の速さ(60/120Hz)に関係なく同じ速さで動かす
   particles.forEach(p=>{ p.x+=p.vx*k; p.y+=p.vy*k; p.vy+=0.25*k; p.life-=0.02*k;
     ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,10,10); });
   ctx.globalAlpha=1;
   requestAnimationFrame(loop);
 }
 
-// ---- 開始 ----
+// ---- 開始・停止 ----
 function stopCam(){ if(stream){ stream.getTracks().forEach(tr=>tr.stop()); stream=null; } video.srcObject=null; }
-addEventListener("pagehide",stopCam);   // ページを閉じたらカメラを解放
+addEventListener("pagehide",stopCam);
+// iPadのスリープ・コントロールセンター後に音が止まった場合、画面タップで復帰
+document.addEventListener("pointerdown",()=>{ if(audio && audio.state!=="running") audio.resume().catch(()=>{}); },true);
 function showErr(msg){ $("err").textContent=msg; }
 $("go").onclick=async()=>{
   showErr("");
+  mode=document.querySelector("input[name=mode]:checked").value;
+  facing=document.querySelector("input[name=cam]:checked").value;
+  mirrorView=(facing==="user");
   try{
-    // クリック直後(awaitの前)に音を有効化(iOS対策)
     const AC=window.AudioContext||window.webkitAudioContext;
-    if(AC && !audio){ audio=new AC(); }
+    if(AC && !audio) audio=new AC();
     if(audio && audio.state==="suspended") audio.resume().catch(()=>{});
-    if(audio){ const sb=audio.createBufferSource(); sb.buffer=audio.createBuffer(1,1,22050); sb.connect(audio.destination); sb.start(0); } // 無音再生でiOSの音を確実に有効化
+    if(audio){ const sb=audio.createBufferSource(); sb.buffer=audio.createBuffer(1,1,22050); sb.connect(audio.destination); sb.start(0); }
   }catch(e){ audio=null; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     showErr("この開き方ではカメラを使えません。\n・PC: ファイルをChromeで開いてください。\n・iPhone/iPad: https:// のアドレスに置いて Safari で開いてください。");
@@ -238,18 +396,27 @@ $("go").onclick=async()=>{
   }
   try{
     stopCam();
-    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480},facingMode:"user"},audio:false});
-    video.srcObject=stream; await video.play();
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480},facingMode:{ideal:facing}},audio:false});
+    video.srcObject=stream;
+    try{ await video.play(); }
+    catch(pe){ stopCam(); showErr("カメラ映像を再生できませんでした。\n低電力モードを解除してから、もう一度「はじめる」を押してください。"); return; }
     if(typeof video.requestVideoFrameCallback==="function"){
-      const onF=()=>{ frameReady=true; video.requestVideoFrameCallback(onF); }; video.requestVideoFrameCallback(onF);
+      const onF=()=>{ if(!stream) return; frameReady=true; video.requestVideoFrameCallback(onF); }; video.requestVideoFrameCallback(onF);
     }
-    $("start").style.display="none"; running=true; requestAnimationFrame(loop);
+    const vw=video.videoWidth||640, vh=video.videoHeight||480;
+    GT=makeGrid(160,Math.max(60,Math.min(320,Math.round(160*vh/vw))));
+    GM.prev=null; balloons=[]; spawnQueue=[]; particles=[]; lastT=0; lastDetT=0;
+    $("mirrorOpts").style.display=mode==="mirror"?"block":"none";
+    $("recal").style.display=mode==="touch"?"inline-block":"none";
+    $("start").style.display="none"; running=true;
+    if(mode==="touch") startCalib();
+    requestAnimationFrame(loop);
   }catch(e){
     stopCam();
     const n=e&&e.name;
-    if(n==="NotAllowedError"||n==="SecurityError") showErr("カメラの使用が許可されていません。\nブラウザのアドレスバー付近のカメラ設定で「許可」にして、もう一度「はじめる」を押してください。");
+    if(n==="NotAllowedError"||n==="SecurityError") showErr("カメラの使用が許可されていません。\nブラウザのカメラ設定で「許可」にして、もう一度「はじめる」を押してください。");
     else if(n==="NotFoundError"||n==="OverconstrainedError") showErr("カメラが見つかりません。カメラが接続されているか確認してください。");
-    else if(n==="NotReadableError") showErr("カメラが他のアプリ(Zoom・Teamsなど)で使用中です。そのアプリを閉じてから押してください。");
+    else if(n==="NotReadableError") showErr("カメラが他のアプリで使用中です。そのアプリを閉じてから押してください。");
     else showErr("カメラを起動できませんでした。("+(n||"")+" "+(e&&e.message||"")+")");
   }
 };
