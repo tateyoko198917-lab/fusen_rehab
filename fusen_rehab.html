@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>ふうせんリハ v1.6</title>
-<!-- ふうせんリハ バージョン 1.6 (2026-11-27) 外部通信なし(映像は端末内のみで処理) / 鏡モード + タッチモード / たまに違う音 -->
+<title>ふうせんリハ v1.9</title>
+<!-- ふうせんリハ バージョン 1.9 (2026-11-28) 外部通信なし(映像は端末内のみで処理) / 鏡モード + タッチモード / たまに違う音 -->
 <style>
   html,body{margin:0;height:100%;background:#111;font-family:sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}
@@ -25,6 +25,11 @@
   #panel input[type=range]{width:100%}
   #panel button{margin-top:8px;font-size:14px;padding:6px 10px}
   #score{position:fixed;top:8px;left:12px;z-index:3;color:#fff;font-size:36px;font-weight:bold;text-shadow:0 2px 6px #000}
+  #timer{position:fixed;top:52px;left:12px;z-index:3;color:#fff;font-size:26px;font-weight:bold;text-shadow:0 2px 6px #000;display:none}
+  #clear{position:fixed;inset:0;z-index:6;display:none;align-items:center;justify-content:center;flex-direction:column;background:#0008;color:#fff;text-align:center;text-shadow:0 2px 8px #000}
+  #clear h2{font-size:64px;margin:0}
+  #clear p{font-size:32px;margin:8px}
+  #clear button{font-size:32px;padding:16px 44px;border:0;border-radius:40px;background:#ff7043;color:#fff;margin:12px}
   #ver{position:fixed;bottom:4px;left:8px;color:#fff8;font-size:11px;z-index:3}
   #calib{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;background:#000c;color:#fff;border-radius:16px;padding:14px 20px;display:none;text-align:center;font-size:18px;max-width:70%}
   #calib button{font-size:16px;padding:8px 14px;margin:8px 4px 0;border:0;border-radius:20px}
@@ -33,9 +38,17 @@
 <body>
 <canvas id="cv"></canvas>
 <div id="score">0</div>
-<div id="ver">ふうせんリハ v1.6</div>
+<div id="timer">0:00.0</div>
+<div id="clear"><h2>🎉 ゴール！</h2><p id="clearTime"></p><p id="clearBest"></p><div><button id="again">もう一度</button></div></div>
+<div id="ver">ふうせんリハ v1.9</div>
 <button id="gear" aria-label="設定">⚙</button>
 <div id="panel">
+  <label>風船が出る場所
+    <select id="area"><option value="all" selected>画面全体</option><option value="bottom">下半分だけ</option><option value="top">上半分だけ</option><option value="left">左半分だけ</option><option value="right">右半分だけ</option></select>
+  </label>
+  <label>ゴール(割る数)
+    <select id="goal"><option value="0" selected>なし(ずっと遊ぶ)</option><option value="5">5こ</option><option value="10">10こ</option><option value="20">20こ</option><option value="30">30こ</option><option value="50">50こ</option></select>
+  </label>
   <label>ふうせんの大きさ <span id="vSize"></span></label><input type="range" id="size" min="8" max="30" value="18">
   <label>同時に出る数 <span id="vNum"></span></label><input type="range" id="num" min="1" max="5" value="2">
   <label>反応しやすさ(右ほど敏感) <span id="vSens"></span></label><input type="range" id="sens" min="1" max="10" value="6">
@@ -45,6 +58,10 @@
     <label><input type="checkbox" id="showmotion" checked> 動いた場所を光らせる</label>
   </div>
   <label><input type="checkbox" id="sound" checked> 音</label>
+  <label>風船以外のものが出る頻度
+    <select id="objrate"><option value="0">なし(風船だけ)</option><option value="0.15">たまに</option><option value="0.3" selected>ときどき</option><option value="0.5">よく</option><option value="1">いつも</option></select>
+  </label>
+  <label><input type="checkbox" id="animalsnd" checked> 動物の鳴き声</label>
   <label>ちがう音が鳴る頻度
     <select id="rare"><option value="0">なし(いつも同じ音)</option><option value="0.1">たまに</option><option value="0.25" selected>ときどき</option><option value="0.5">よく</option><option value="1">毎回ちがう音</option></select>
   </label>
@@ -74,19 +91,42 @@
 <script>
 (function(){
 "use strict";
-const VERSION="1.6";
+const VERSION="1.9";
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
 const video=document.createElement("video"); video.playsInline=true; video.muted=true;
 video.setAttribute("playsinline","");
 const $=id=>document.getElementById(id);
 const num=id=>parseFloat($(id).value);
 const POP_MS=120;                 // 風船の中でこの時間(ミリ秒)動き続けたら割れる
-const CALIB_KEY="fusenrehab_calib_v2";   // v1.6: カメラ・画面向き・映像比も保存
+const CALIB_KEY="fusenrehab_calib_v2";   // v1.8: カメラ・画面向き・映像比も保存
 
 // ---- 状態 ----
 let mode="mirror", facing="user", mirrorView=true;
 let W=0,H=0, running=false, audio=null, stream=null;
 let balloons=[], particles=[], score=0, spawnQueue=[];
+let startTime=null, cleared=false, clearMs=0;   // v1.9: タイム計測
+function goal(){ return parseInt($("goal").value,10); }
+function fmtTime(ms){ const s=ms/1000, m=Math.floor(s/60); return m+":"+(s-m*60).toFixed(1).padStart(4,"0"); }
+function updHud(){
+  const g=goal();
+  $("score").textContent=g>0?(score+" / "+g):String(score);
+  $("timer").style.display=g>0?"block":"none";
+}
+function bestKey(){ return "fusenrehab_best_"+goal(); }
+function restartGame(){
+  score=0; cleared=false; startTime=null; balloons=[]; spawnQueue=[];
+  $("clear").style.display="none"; $("timer").textContent="0:00.0"; updHud();
+  if(mode==="touch") suppressUntil=performance.now()+800;
+}
+// v1.9: 風船が出る範囲(画面全体/半分)
+function region(){
+  const a=$("area").value;
+  if(a==="bottom") return [0,H/2,W,H];
+  if(a==="top") return [0,0,W,H/2];
+  if(a==="left") return [0,0,W/2,H];
+  if(a==="right") return [W/2,0,W,H];
+  return [0,0,W,H];
+}
 let lastSpawnAt=-1e9, lastT=0, lastDetT=0, frameReady=true, suppressUntil=0;
 let calibrating=false, calibPts=[], calibRect=[0,0,1,1], Hm=null;
 
@@ -97,6 +137,7 @@ let GM=makeGrid(80,60), GT=makeGrid(160,120);
 
 // ---- 画面サイズ ----
 function resize(){
+  if(!innerWidth || !innerHeight) return;   // 最小化などで0になったときは何もしない
   W=cv.width=innerWidth; H=cv.height=innerHeight;
   GM=makeGrid(80,Math.max(20,Math.min(200,Math.round(80*H/W))));
   balloons=[]; spawnQueue=[]; particles=[];
@@ -107,7 +148,9 @@ resize();
 
 // ---- 鏡モード: 映像を画面比に合わせて中央切り抜き ----
 function cropRect(){
-  const vw=video.videoWidth, vh=video.videoHeight, a=W/H, va=vw/vh;
+  const vw=video.videoWidth, vh=video.videoHeight;
+  if(!vw || !vh || !W || !H) return [0,0,1,1];
+  const a=W/H, va=vw/vh;
   if(va>a){ const cw=vh*a; return [(vw-cw)/2,0,cw,vh]; }
   const ch=vw/a; return [0,(vh-ch)/2,vw,ch];
 }
@@ -119,17 +162,25 @@ $("size").addEventListener("change",()=>{ balloons=[]; spawnQueue=[]; particles=
 function panelOpen(){ return $("panel").style.display==="block"; }
 $("gear").onclick=()=>{ $("panel").style.display=panelOpen()?"none":"block"; };
 addEventListener("keydown",e=>{ if(e.key==="Escape") $("panel").style.display="none"; });
-$("reset").onclick=()=>{ score=0; $("score").textContent=score; };
+$("reset").onclick=()=>{ restartGame(); };
+$("goal").addEventListener("change",()=>{ restartGame(); });
+$("area").addEventListener("change",()=>{ balloons=[]; spawnQueue=[]; });
+$("again").onclick=()=>{ restartGame(); };
 $("recal").onclick=()=>{ $("panel").style.display="none"; startCalib(); };
 $("home").onclick=()=>{ running=false; calibrating=false; stopCam(); $("panel").style.display="none"; $("calib").style.display="none"; $("start").style.display="flex"; };
 
 // ---- 音 ----
+let master=null;   // v1.8: 音が重なっても割れないようにコンプレッサーを通す
+function out(){
+  if(!master){ master=audio.createDynamicsCompressor(); master.threshold.value=-14; master.ratio.value=8; master.connect(audio.destination); }
+  return master;
+}
 function tone(f,st,dur,type,vol,f2){   // 1音を鳴らす(f2を指定すると音程がすべる)
   const o=audio.createOscillator(), g=audio.createGain();
   o.type=type; o.frequency.setValueAtTime(f,st);
   if(f2) o.frequency.exponentialRampToValueAtTime(f2,st+dur);
   g.gain.setValueAtTime(vol,st); g.gain.exponentialRampToValueAtTime(0.001,st+dur);
-  o.connect(g); g.connect(audio.destination);
+  o.connect(g); g.connect(out());
   o.onended=()=>{ o.disconnect(); g.disconnect(); };
   o.start(st); o.stop(st+dur+0.05);
 }
@@ -146,6 +197,27 @@ const SPECIAL=[
   t=>{ for(let i=0;i<8;i++) tone(400+i*120,t+i*0.04,0.12,"sawtooth",0.05); tone(1500,t+0.35,0.5,"sine",0.12); } // キラーン
 ];
 let lastSpecial=-1;
+// ---- v1.8: 動物の鳴き声(音を合成して作るので、本物そっくりではなく「それっぽい」音) ----
+function voice(t,type,pts,fpts,q,vol,dur){   // pts/fpts: [[秒,Hz],...] 音程とこもり具合の変化
+  const o=audio.createOscillator(), f=audio.createBiquadFilter(), g=audio.createGain();
+  o.type=type; f.type="bandpass"; f.Q.value=q;
+  o.frequency.setValueAtTime(pts[0][1],t); pts.slice(1).forEach(p=>o.frequency.linearRampToValueAtTime(p[1],t+p[0]));
+  f.frequency.setValueAtTime(fpts[0][1],t); fpts.slice(1).forEach(p=>f.frequency.linearRampToValueAtTime(p[1],t+p[0]));
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.03);
+  g.gain.setValueAtTime(vol,t+dur*0.7); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(f); f.connect(g); g.connect(out());
+  o.onended=()=>{ o.disconnect(); f.disconnect(); g.disconnect(); };
+  o.start(t); o.stop(t+dur+0.05);
+}
+const ANIMAL={
+  cat:t=>{ const h=0.9+Math.random()*0.3;   // にゃーお(毎回少し高さを変える)
+    voice(t,"sawtooth",[[0,480*h],[0.15,780*h],[0.45,700*h],[0.65,420*h]],[[0,900],[0.15,2000],[0.45,1600],[0.65,800]],3,0.5,0.7); },
+  dog:t=>{ voice(t,"sawtooth",[[0,420],[0.06,520],[0.18,300]],[[0,700],[0.06,1300],[0.18,600]],2,0.6,0.2);   // わんわん
+           voice(t+0.28,"sawtooth",[[0,440],[0.06,540],[0.18,310]],[[0,700],[0.06,1300],[0.18,600]],2,0.6,0.2); },
+  frog:t=>{ for(let i=0;i<2;i++){ voice(t+i*0.22,"square",[[0,170],[0.12,150]],[[0,600],[0.12,1100]],5,0.5,0.13);  // けろけろ
+            voice(t+i*0.22+0.08,"square",[[0,210],[0.06,190]],[[0,1200],[0.06,800]],5,0.4,0.08); } },
+  bird:t=>{ for(let i=0;i<3;i++) tone(2600+i*200,t+i*0.12,0.08,"sine",0.15,3600+i*200); }   // ぴよぴよ
+};
 function beep(){
   if(!$("sound").checked||!audio) return;
   if(audio.state==="suspended") audio.resume().catch(()=>{});
@@ -159,18 +231,31 @@ function beep(){
 // ---- 風船 ----
 const COLORS=["#ef5350","#ffca28","#66bb6a","#42a5f5","#ab47bc","#ff7043"];
 function radius(){
+  const R=region(), rw=R[2]-R[0], rh=R[3]-R[1];
   const r=Math.min(W,H)*num("size")/100;
-  return Math.max(10,Math.min(r, W/2.2, H/2.9));
+  return Math.max(10,Math.min(r, rw/2.2, rh/2.9));   // 範囲内に収まる大きさに制限
+}
+// v1.8: 風船以外に出てくるもの(e=絵文字, snd=鳴き声, fx=専用の演出)
+const OBJS=[
+  {e:"🐱",snd:"cat",fx:"paw"},{e:"🐶",snd:"dog",fx:"paw"},{e:"🐸",snd:"frog",fx:"bubbles"},{e:"🐤",snd:"bird",fx:"notes"},
+  {e:"🐟",fx:"bubbles"},{e:"🍎",fx:"hearts"},{e:"🍓",fx:"hearts"},{e:"⭐",fx:"stars"},{e:"🚗",fx:"firework"},{e:"🍩",fx:"confetti"}
+];
+let lastObj=-1;
+function pickObj(){
+  if(Math.random()>=num("objrate")) return null;
+  let k; do{ k=Math.floor(Math.random()*OBJS.length); }while(k===lastObj && OBJS.length>1);
+  lastObj=k; return OBJS[k];
 }
 function spawn(t){
   const r=radius();
   const mg=mode==="touch"?Math.min(W,H)*0.04:0;   // タッチモードは端の目印と重ならないよう少し内側
-  const xr=Math.max(0,W-2*r-2*mg), yr=Math.max(0,H-2*r-r*0.7-2*mg);
+  const R=region();
+  const xr=Math.max(0,(R[2]-R[0])-2*r-2*mg), yr=Math.max(0,(R[3]-R[1])-2*r-r*0.7-2*mg);
   for(const gap of [2.2,1.6,1.0]){
     for(let k=0;k<30;k++){
-      const x=r+mg+Math.random()*xr, y=r+mg+Math.random()*yr;
+      const x=R[0]+r+mg+Math.random()*xr, y=R[1]+r+mg+Math.random()*yr;
       if(balloons.every(b=>Math.hypot(b.x-x,b.y-y)>r*gap)){
-        balloons.push({x:x,y:y,r:r,c:COLORS[Math.floor(Math.random()*COLORS.length)],hit:0,ph:Math.random()*6.28,born:t});
+        balloons.push({x:x,y:y,r:r,c:COLORS[Math.floor(Math.random()*COLORS.length)],hit:0,ph:Math.random()*6.28,born:t,o:pickObj()});
         return true;
       }
     }
@@ -178,17 +263,79 @@ function spawn(t){
   return false;
 }
 function pop(b,t){
-  for(let i=0;i<28;i++){
-    const a=Math.random()*6.28, s=2+Math.random()*7;
-    particles.push({x:b.x,y:b.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,life:1,c:COLORS[Math.floor(Math.random()*COLORS.length)]});
-  }
-  score++; $("score").textContent=score; beep();
+  // 演出: 専用の演出があれば半分の確率でそれ、残りはランダム
+  const fx=(b.o && Math.random()<0.5)?b.o.fx:FX_LIST[Math.floor(Math.random()*FX_LIST.length)];
+  makeFx(fx,b.x,b.y,b.r);
+  score++; updHud();
+  if(goal()>0 && score>=goal() && !cleared){ reachGoal(t,b); return; }
+  if(b.o && b.o.snd && $("animalsnd").checked && $("sound").checked && audio){
+    if(audio.state==="suspended") audio.resume().catch(()=>{});
+    ANIMAL[b.o.snd](audio.currentTime+0.01);
+  }else beep();
   // タッチモードは紙吹雪をカメラが「動き」と誤認しないよう、しばらく判定を止める
   if(mode==="touch") suppressUntil=t+900;
 }
+// ---- v1.9: ゴール ----
+function reachGoal(t,b){
+  cleared=true; clearMs=startTime==null?0:t-startTime;
+  balloons=[]; spawnQueue=[];
+  for(let i=0;i<4;i++) makeFx("firework",W*(0.2+0.2*i),H*(0.3+0.15*(i%2)),Math.min(W,H)*0.2);
+  makeFx("confetti",b.x,b.y,b.r);
+  if($("sound").checked && audio){ if(audio.state==="suspended") audio.resume().catch(()=>{}); SPECIAL[0](audio.currentTime+0.01); }
+  let best=null; try{ best=parseFloat(localStorage.getItem(bestKey())); }catch(e){}
+  const isBest=!(best>0) || clearMs<best;
+  if(isBest){ try{ localStorage.setItem(bestKey(),String(clearMs)); }catch(e){} }
+  $("clearTime").textContent=goal()+"こ　タイム "+fmtTime(clearMs);
+  $("clearBest").textContent=isBest?"🏆 新記録！":"ベスト "+fmtTime(best);
+  $("timer").textContent=fmtTime(clearMs);
+  $("clear").style.display="flex";
+}
+// ---- v1.8: 割れたときの演出 ----
+const FX_LIST=["confetti","stars","hearts","notes","firework","bubbles"];
+const rc=()=>COLORS[Math.floor(Math.random()*COLORS.length)];
+function makeFx(fx,x,y,r){
+  const sz=Math.max(18,r*0.35);
+  if(fx==="confetti"){
+    for(let i=0;i<28;i++){ const a=Math.random()*6.28, s=2+Math.random()*7;
+      particles.push({k:"rect",x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,g:0.25,life:1,c:rc()}); }
+  }else if(fx==="stars"||fx==="hearts"||fx==="notes"||fx==="paw"){
+    const ch={stars:["★","☆"],hearts:["♥"],notes:["♪","♫"],paw:["🐾"]}[fx];
+    const col={stars:"#ffeb3b",hearts:"#ff4081",notes:null,paw:null}[fx];
+    for(let i=0;i<14;i++){ const a=Math.random()*6.28, s=2+Math.random()*5;
+      particles.push({k:"txt",t:ch[i%ch.length],x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-3,g:fx==="notes"?-0.05:0.15,life:1,c:col||rc(),sz:sz*(0.8+Math.random()*0.6)}); }
+  }else if(fx==="firework"){
+    particles.push({k:"ring",x:x,y:y,rad:r*0.3,vr:r*0.06,life:1,c:"#fff",g:0,vx:0,vy:0});
+    particles.push({k:"ring",x:x,y:y,rad:r*0.1,vr:r*0.04,life:1,c:rc(),g:0,vx:0,vy:0});
+    for(let i=0;i<36;i++){ const a=i/36*6.28, s=6+Math.random()*2;
+      particles.push({k:"dot",x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,g:0.08,life:1,c:rc(),sz:4+Math.random()*3}); }
+  }else if(fx==="bubbles"){
+    for(let i=0;i<16;i++){
+      particles.push({k:"bub",x:x+(Math.random()-0.5)*r*1.5,y:y+(Math.random()-0.5)*r,vx:(Math.random()-0.5)*1.5,vy:-1.5-Math.random()*3,g:-0.03,life:1,c:"#b3e5fc",sz:6+Math.random()*r*0.25}); }
+  }
+}
+function drawParticles(k){
+  particles=particles.filter(p=>p.life>0);
+  particles.forEach(p=>{
+    p.x+=p.vx*k; p.y+=p.vy*k; p.vy+=p.g*k; p.life-=0.02*k;
+    ctx.globalAlpha=Math.max(0,p.life);
+    if(p.k==="rect"){ ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,10,10); }
+    else if(p.k==="txt"){ ctx.fillStyle=p.c; ctx.font=Math.round(p.sz)+"px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(p.t,p.x,p.y); }
+    else if(p.k==="ring"){ p.rad+=p.vr*k; ctx.strokeStyle=p.c; ctx.lineWidth=5; ctx.beginPath(); ctx.arc(p.x,p.y,p.rad,0,6.283); ctx.stroke(); }
+    else if(p.k==="dot"){ ctx.fillStyle=p.c; ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,6.283); ctx.fill(); }
+    else if(p.k==="bub"){ ctx.strokeStyle=p.c; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,6.283); ctx.stroke(); }
+  });
+  ctx.globalAlpha=1;
+}
+
 function bobY(b,t){ return mode==="touch"?b.y:b.y+Math.sin(t/600+b.ph)*b.r*0.08; } // タッチモードは揺らさない
 function drawBalloon(b,t){
   const yy=bobY(b,t);
+  if(b.o){   // 風船以外のもの
+    ctx.font=Math.round(b.r*1.7)+"px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(b.o.e,b.x,yy);
+    if(b.hit>0 && mode==="mirror"){ ctx.strokeStyle="#fff"; ctx.lineWidth=6; ctx.beginPath(); ctx.ellipse(b.x,yy,b.r*0.85,b.r,0,0,6.283); ctx.stroke(); }
+    return;
+  }
   ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(b.x,yy+b.r); ctx.quadraticCurveTo(b.x+b.r*0.2,yy+b.r*1.4,b.x,yy+b.r*1.7); ctx.stroke();
   const g=ctx.createRadialGradient(b.x-b.r*0.3,yy-b.r*0.3,b.r*0.1,b.x,yy,b.r);
   g.addColorStop(0,"#fff"); g.addColorStop(0.25,b.c); g.addColorStop(1,b.c);
@@ -236,6 +383,7 @@ function checkHits(t,dt){
         if(dx*dx+dy*dy<=1){ tot++; mv+=GM.mot[y*GM.w+x]; }
       }
     }else{
+      if(!Hm) continue;   // 位置合わせ前は判定しない
       // タッチモード: 風船内の点をスクリーン→カメラ座標に変換して調べる
       for(let iy=-5;iy<=5;iy++)for(let ix=-5;ix<=5;ix++){
         const dx=ix/5, dy=iy/5; if(dx*dx+dy*dy>1) continue;
@@ -274,14 +422,15 @@ function loadCalib(){
   try{
     const d=JSON.parse(localStorage.getItem(CALIB_KEY)||"null"); if(!d) return null;
     const c=calibCond();
-    return (d.facing===c.facing && d.land===c.land && d.va===c.va)?d.h:null;   // 条件が違えば使わない
+    const ok=Array.isArray(d.h) && d.h.length===8 && d.h.every(Number.isFinite);   // 壊れたデータは使わない
+    return (ok && d.facing===c.facing && d.land===c.land && d.va===c.va)?d.h:null;   // 条件が違えば使わない
   }catch(e){ return null; }
 }
 function saveCalib(h){ try{ const d=calibCond(); d.h=h; localStorage.setItem(CALIB_KEY,JSON.stringify(d)); }catch(e){} }
 function calibMsg(){
   if(!calibrating) return;
   const names=["① 赤(左上)","② 緑(右上)","③ 青(右下)","④ 黄(左下)"];
-  $("calibMsg").innerHTML="カメラ映像の中に写っている<br><b style='color:"+MARK_COLORS[calibPts.length]+"'>"+names[calibPts.length]+"</b> の丸をタップ<br><small>("+(calibPts.length+1)+"/4)</small>";
+  $("calibMsg").innerHTML="カメラ映像の中に写っている<br><b style='color:"+MARK_COLORS[calibPts.length]+"'>"+names[calibPts.length]+"</b> の丸をタップ<br><small>("+(calibPts.length+1)+"/4)　※iPadは画面の回転ロックをオンにしておくと安心です</small>";
 }
 function startCalib(){
   calibrating=true; calibPts=[]; balloons=[]; spawnQueue=[]; particles=[];
@@ -289,7 +438,7 @@ function startCalib(){
   $("calib").style.display="block"; calibMsg();
 }
 function finishCalib(h){
-  Hm=h; calibrating=false; $("calib").style.display="none";
+  Hm=h; calibrating=false; $("calib").style.display="none"; startTime=null;
   GT.prev=null; GT.mot.fill(0); suppressUntil=performance.now()+800;
 }
 $("calibRedo").onclick=e=>{ e.stopPropagation(); calibPts=[]; calibMsg(); };
@@ -354,7 +503,7 @@ function loop(t){
     }
     if(detect()){
       // タッチモードは設定パネル表示中・紙吹雪中は判定しない
-      if(!(mode==="touch" && (t<suppressUntil || panelOpen()))) checkHits(t,Math.min(200,lastDetT?t-lastDetT:33));
+      if(!cleared && !(mode==="touch" && (t<suppressUntil || panelOpen()))) checkHits(t,Math.min(200,lastDetT?t-lastDetT:33));
       lastDetT=t;
     }
     if(mode==="mirror" && $("showmotion").checked){
@@ -362,14 +511,24 @@ function loop(t){
       const cw=W/GM.w, ch=H/GM.h;
       for(let y=0;y<GM.h;y++)for(let x=0;x<GM.w;x++) if(GM.mot[y*GM.w+x]) ctx.fillRect(x*cw,y*ch,cw+1,ch+1);
     }
-    refill(t);
+    if(!cleared){
+      if(startTime==null) startTime=t;   // 遊び始め(位置合わせ後)から計測
+      refill(t);
+      if(goal()>0) $("timer").textContent=fmtTime(t-startTime);
+    }
+  }
+  // 範囲外を暗くする(風船が出ない場所)
+  const R=region();
+  if(R[2]-R[0]<W || R[3]-R[1]<H){
+    ctx.fillStyle="rgba(0,0,0,0.65)";
+    if(R[1]>0) ctx.fillRect(0,0,W,R[1]);
+    if(R[3]<H) ctx.fillRect(0,R[3],W,H-R[3]);
+    if(R[0]>0) ctx.fillRect(0,0,R[0],H);
+    if(R[2]<W) ctx.fillRect(R[2],0,W-R[2],H);
   }
   balloons.forEach(b=>drawBalloon(b,t));
   const k=dt/16.7;
-  particles=particles.filter(p=>p.life>0);
-  particles.forEach(p=>{ p.x+=p.vx*k; p.y+=p.vy*k; p.vy+=0.25*k; p.life-=0.02*k;
-    ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,10,10); });
-  ctx.globalAlpha=1;
+  drawParticles(k);
   requestAnimationFrame(loop);
 }
 
@@ -403,11 +562,13 @@ $("go").onclick=async()=>{
     if(typeof video.requestVideoFrameCallback==="function"){
       const onF=()=>{ if(!stream) return; frameReady=true; video.requestVideoFrameCallback(onF); }; video.requestVideoFrameCallback(onF);
     }
+    frameReady=true;   // 再スタート時に確実に検出を再開
     const vw=video.videoWidth||640, vh=video.videoHeight||480;
     GT=makeGrid(160,Math.max(60,Math.min(320,Math.round(160*vh/vw))));
     GM.prev=null; balloons=[]; spawnQueue=[]; particles=[]; lastT=0; lastDetT=0;
     $("mirrorOpts").style.display=mode==="mirror"?"block":"none";
     $("recal").style.display=mode==="touch"?"inline-block":"none";
+    restartGame();
     $("start").style.display="none"; running=true;
     if(mode==="touch") startCalib();
     requestAnimationFrame(loop);
