@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ふうせんリハ v1.3</title>
+<!-- ふうせんリハ バージョン 1.3 (2026-11-27) 完全オフライン動作 / カメラの動きで風船を割る -->
+<style>
+  html,body{margin:0;height:100%;background:#111;font-family:sans-serif;overflow:hidden}
+  canvas{position:fixed;inset:0;width:100%;height:100%}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff8e1;z-index:5;text-align:center;padding:16px;box-sizing:border-box}
+  #start h1{font-size:40px;margin:0 0 8px}
+  #start button{font-size:32px;padding:20px 48px;border:0;border-radius:40px;background:#ff7043;color:#fff;margin-top:20px}
+  #start p{margin:4px;color:#555}
+  #err{color:#c62828;font-weight:bold;white-space:pre-line;margin-top:12px;max-width:520px}
+  #gear{position:fixed;top:8px;right:8px;z-index:4;font-size:26px;background:#fff9;border:0;border-radius:50%;width:48px;height:48px}
+  #panel{position:fixed;top:60px;right:8px;z-index:4;background:#fffe;border-radius:12px;padding:12px 16px;display:none;width:260px;font-size:14px}
+  #panel label{display:block;margin:8px 0 2px}
+  #panel input[type=range]{width:100%}
+  #score{position:fixed;top:8px;left:12px;z-index:3;color:#fff;font-size:36px;font-weight:bold;text-shadow:0 2px 6px #000}
+  #ver{position:fixed;bottom:4px;left:8px;color:#fff8;font-size:11px;z-index:3}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="score">0</div>
+<div id="ver">ふうせんリハ v1.3</div>
+<button id="gear">⚙</button>
+<div id="panel">
+  <label>ふうせんの大きさ <span id="vSize"></span></label><input type="range" id="size" min="8" max="30" value="18">
+  <label>同時に出る数 <span id="vNum"></span></label><input type="range" id="num" min="1" max="5" value="2">
+  <label>反応しやすさ(右ほど敏感) <span id="vSens"></span></label><input type="range" id="sens" min="1" max="10" value="6">
+  <label>次の風船が出るまでの間(秒) <span id="vWait"></span></label><input type="range" id="wait" min="0" max="5" value="1" step="0.5">
+  <label><input type="checkbox" id="showcam" checked> カメラ映像を表示</label>
+  <label><input type="checkbox" id="showmotion" checked> 動いた場所を光らせる</label>
+  <label><input type="checkbox" id="sound" checked> 音</label>
+  <button id="reset" style="margin-top:8px">スコアをリセット</button>
+</div>
+<div id="start">
+  <h1>🎈 ふうせんリハ</h1>
+  <p>からだのどこでも、動かすと風船が割れます</p>
+  <p>カメラの前に座って、風船のところで手や足を動かそう</p>
+  <button id="go">はじめる</button>
+  <div id="err"></div>
+  <p style="margin-top:16px;font-size:12px">映像は外部に送信されず、この端末内だけで処理されます</p>
+</div>
+<script>
+(function(){
+"use strict";
+const VERSION="1.3";
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+const small=document.createElement("canvas");
+const sctx=small.getContext("2d",{willReadFrequently:true});
+const video=document.createElement("video"); video.playsInline=true; video.muted=true;
+video.setAttribute("playsinline",""); // iOS Safari 用
+const $=id=>document.getElementById(id);
+const SW=80; let SH=60;               // 検出用グリッド(縦は画面比に合わせて変える)
+let W=0,H=0, prev=null, motion=new Uint8Array(SW*SH);
+let balloons=[], particles=[], score=0, running=false, audio=null;
+let spawnQueue=[];                     // 割れた風船ごとの補充予定時刻(v1.3: 個別タイマー)
+let lastSpawnAt=-1e9, lastT=0, lastDetT=0, frameReady=true, stream=null;
+const POP_MS=120;                      // 風船の中でこの時間(ミリ秒)動き続けたら割れる
+const num=id=>parseFloat($(id).value);
+
+// ---- 画面サイズ ----
+function resize(){
+  W=cv.width=innerWidth; H=cv.height=innerHeight;
+  SH=Math.max(20,Math.min(200,Math.round(SW*H/W)));   // 画面と同じ縦横比の検出グリッド
+  small.width=SW; small.height=SH;
+  motion=new Uint8Array(SW*SH); prev=null;
+  balloons=[]; spawnQueue=[]; particles=[];
+}
+addEventListener("resize",resize); resize();
+
+// ---- 映像を画面比に合わせて中央切り抜き(引き伸ばし防止) ----
+function cropRect(){
+  const vw=video.videoWidth, vh=video.videoHeight;
+  const a=W/H, va=vw/vh;
+  if(va>a){ const cw=vh*a; return [(vw-cw)/2,0,cw,vh]; }
+  const ch=vw/a; return [0,(vh-ch)/2,vw,ch];
+}
+
+// ---- 設定表示 ----
+function upd(){ $("vSize").textContent=$("size").value; $("vNum").textContent=$("num").value; $("vSens").textContent=$("sens").value; $("vWait").textContent=$("wait").value; }
+["size","num","sens","wait"].forEach(i=>$(i).addEventListener("input",upd)); upd();
+$("size").addEventListener("change",()=>{ balloons=[]; spawnQueue=[]; particles=[]; });
+cv.addEventListener("pointerdown",()=>{ $("panel").style.display="none"; });
+addEventListener("keydown",e=>{ if(e.key==="Escape") $("panel").style.display="none"; });
+$("gear").onclick=()=>{ const p=$("panel"); p.style.display=p.style.display==="block"?"none":"block"; };
+$("reset").onclick=()=>{ score=0; $("score").textContent=score; };
+
+// ---- 音 ----
+function beep(){
+  if(!$("sound").checked||!audio) return;
+  if(audio.state==="suspended") audio.resume().catch(()=>{});
+  const t=audio.currentTime;
+  [660,880,1175].forEach((f,i)=>{
+    const o=audio.createOscillator(), g=audio.createGain();
+    o.type="sine"; o.frequency.value=f; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(0.15,t+i*0.07); g.gain.exponentialRampToValueAtTime(0.001,t+i*0.07+0.25);
+    o.onended=()=>{ o.disconnect(); g.disconnect(); };
+    o.start(t+i*0.07); o.stop(t+i*0.07+0.3);
+  });
+}
+
+// ---- 風船 ----
+const COLORS=["#ef5350","#ffca28","#66bb6a","#42a5f5","#ab47bc","#ff7043"];
+function radius(){
+  // 紐を含めて画面に収まる大きさに制限
+  const r=Math.min(W,H)*num("size")/100;
+  return Math.max(10,Math.min(r, W/2.2, H/2.9));
+}
+function spawn(t){
+  const r=radius();
+  const xr=Math.max(0,W-2*r), yr=Math.max(0,H-2*r-r*0.7);
+  for(const gap of [2.2,1.6,1.0]){        // 置けなければ間隔を少しずつ詰める
+    for(let k=0;k<30;k++){
+      const x=r+Math.random()*xr, y=r+Math.random()*yr;
+      if(balloons.every(b=>Math.hypot(b.x-x,b.y-y)>r*gap)){
+        balloons.push({x:x,y:y,r:r,c:COLORS[Math.floor(Math.random()*COLORS.length)],hit:0,ph:Math.random()*6.28,born:t});
+        return true;
+      }
+    }
+  }
+  return false; // それでも無理なら次のフレームで再挑戦
+}
+function pop(b){
+  for(let i=0;i<28;i++){
+    const a=Math.random()*6.28, s=2+Math.random()*7;
+    particles.push({x:b.x,y:b.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,life:1,c:COLORS[Math.floor(Math.random()*COLORS.length)]});
+  }
+  score++; $("score").textContent=score; beep();
+}
+function bobY(b,t){ return b.y+Math.sin(t/600+b.ph)*b.r*0.08; }
+function drawBalloon(b,t){
+  const yy=bobY(b,t);
+  ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(b.x,yy+b.r); ctx.quadraticCurveTo(b.x+b.r*0.2,yy+b.r*1.4,b.x,yy+b.r*1.7); ctx.stroke();
+  const g=ctx.createRadialGradient(b.x-b.r*0.3,yy-b.r*0.3,b.r*0.1,b.x,yy,b.r);
+  g.addColorStop(0,"#fff"); g.addColorStop(0.25,b.c); g.addColorStop(1,b.c);
+  ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(b.x,yy,b.r*0.85,b.r,0,0,6.283); ctx.fill();
+  if(b.hit>0){ ctx.strokeStyle="#fff"; ctx.lineWidth=6; ctx.stroke(); }
+}
+
+// ---- 動き検出 ----
+function detect(){
+  // v1.3: カメラ(30fps)より画面(60/120Hz)が速いと同じ映像を2回比べて「動きなし」になる問題の対策
+  if(!frameReady) return false;
+  if(typeof video.requestVideoFrameCallback==="function") frameReady=false;
+  const [cx,cy,cw,ch]=cropRect();
+  sctx.save(); sctx.translate(SW,0); sctx.scale(-1,1);
+  sctx.drawImage(video,cx,cy,cw,ch,0,0,SW,SH); sctx.restore();
+  const d=sctx.getImageData(0,0,SW,SH).data;
+  const gray=new Uint8Array(SW*SH);
+  for(let i=0;i<SW*SH;i++) gray[i]=(d[i*4]*0.3+d[i*4+1]*0.59+d[i*4+2]*0.11);
+  if(prev){ let same=true; for(let i=0;i<SW*SH;i++){ if(gray[i]!==prev[i]){ same=false; break; } } if(same) return false; }
+  const thr=44-num("sens")*3; // 敏感なほど小さい差で反応
+  if(prev) for(let i=0;i<SW*SH;i++) motion[i]=Math.abs(gray[i]-prev[i])>thr?1:0;
+  prev=gray;
+  // 画面全体の半分以上が動いた=カメラの明るさ補正や揺れとみなして無視(誤爆防止)
+  let cnt=0; for(let i=0;i<SW*SH;i++) cnt+=motion[i];
+  if(cnt>SW*SH*0.5) motion.fill(0);
+  return true;
+}
+function checkHits(t,dt){
+  const need=0.22-num("sens")*0.015; // 風船内で動いた割合
+  const sx=SW/W, sy=SH/H;
+  for(let i=balloons.length-1;i>=0;i--){
+    const b=balloons[i]; let tot=0,mv=0; const by=bobY(b,t), rx=b.r*0.85;
+    const x0=Math.max(0,Math.floor((b.x-rx)*sx)), x1=Math.min(SW-1,Math.ceil((b.x+rx)*sx));
+    const y0=Math.max(0,Math.floor((by-b.r)*sy)), y1=Math.min(SH-1,Math.ceil((by+b.r)*sy));
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      const dx=((x+0.5)/sx-b.x)/rx, dy=((y+0.5)/sy-by)/b.r;   // 描画と同じ楕円で判定
+      if(dx*dx+dy*dy<=1){ tot++; mv+=motion[y*SW+x]; }
+    }
+    if(tot>0 && mv/tot>need && t-b.born>500) b.hit+=dt; else b.hit=Math.max(0,b.hit-dt);   // 時間(ms)で積算
+    if(b.hit>=POP_MS){ pop(b); balloons.splice(i,1); spawnQueue.push(t+num("wait")*1000); }
+  }
+}
+
+// ---- 補充(時間は全て requestAnimationFrame の t に統一) ----
+function refill(t){
+  const want=parseInt($("num").value,10);
+  while(balloons.length>want) balloons.pop();
+  while(balloons.length+spawnQueue.length>want) spawnQueue.pop();
+  if(balloons.length>=want || t-lastSpawnAt<300) return;
+  spawnQueue.sort((a,b)=>a-b);
+  if(spawnQueue.length>0 && spawnQueue[0]<=t){
+    if(spawn(t)){ spawnQueue.shift(); lastSpawnAt=t; }
+  }else if(balloons.length+spawnQueue.length<want){
+    if(spawn(t)) lastSpawnAt=t;   // 初回や数を増やしたとき
+  }
+}
+
+// ---- メインループ ----
+function loop(t){
+  if(!running) return;
+  const dt=Math.min(100,lastT?t-lastT:16.7); lastT=t;
+  ctx.fillStyle="#222"; ctx.fillRect(0,0,W,H);
+  if(video.readyState>=2 && video.videoWidth>0){
+    if($("showcam").checked){
+      const [cx,cy,cw,ch]=cropRect();
+      ctx.save(); ctx.translate(W,0); ctx.scale(-1,1);
+      ctx.globalAlpha=0.55; ctx.drawImage(video,cx,cy,cw,ch,0,0,W,H); ctx.restore(); ctx.globalAlpha=1;
+    }
+    if(detect()){ checkHits(t,Math.min(200,lastDetT?t-lastDetT:33)); lastDetT=t; }
+    if($("showmotion").checked){
+      ctx.fillStyle="rgba(255,255,120,0.35)";
+      const cw=W/SW, ch=H/SH;
+      for(let y=0;y<SH;y++)for(let x=0;x<SW;x++) if(motion[y*SW+x]) ctx.fillRect(x*cw,y*ch,cw+1,ch+1);
+    }
+    refill(t);   // v1.3: 映像が出てから風船を出す
+  }
+  balloons.forEach(b=>drawBalloon(b,t));
+  particles=particles.filter(p=>p.life>0);
+  const k=dt/16.7;   // v1.3: 画面の速さ(60/120Hz)に関係なく同じ速さで動かす
+  particles.forEach(p=>{ p.x+=p.vx*k; p.y+=p.vy*k; p.vy+=0.25*k; p.life-=0.02*k;
+    ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,10,10); });
+  ctx.globalAlpha=1;
+  requestAnimationFrame(loop);
+}
+
+// ---- 開始 ----
+function stopCam(){ if(stream){ stream.getTracks().forEach(tr=>tr.stop()); stream=null; } video.srcObject=null; }
+addEventListener("pagehide",stopCam);   // ページを閉じたらカメラを解放
+function showErr(msg){ $("err").textContent=msg; }
+$("go").onclick=async()=>{
+  showErr("");
+  try{
+    // クリック直後(awaitの前)に音を有効化(iOS対策)
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(AC && !audio){ audio=new AC(); }
+    if(audio && audio.state==="suspended") audio.resume().catch(()=>{});
+    if(audio){ const sb=audio.createBufferSource(); sb.buffer=audio.createBuffer(1,1,22050); sb.connect(audio.destination); sb.start(0); } // 無音再生でiOSの音を確実に有効化
+  }catch(e){ audio=null; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    showErr("この開き方ではカメラを使えません。\n・PC: ファイルをChromeで開いてください。\n・iPhone/iPad: https:// のアドレスに置いて Safari で開いてください。");
+    return;
+  }
+  try{
+    stopCam();
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480},facingMode:"user"},audio:false});
+    video.srcObject=stream; await video.play();
+    if(typeof video.requestVideoFrameCallback==="function"){
+      const onF=()=>{ frameReady=true; video.requestVideoFrameCallback(onF); }; video.requestVideoFrameCallback(onF);
+    }
+    $("start").style.display="none"; running=true; requestAnimationFrame(loop);
+  }catch(e){
+    stopCam();
+    const n=e&&e.name;
+    if(n==="NotAllowedError"||n==="SecurityError") showErr("カメラの使用が許可されていません。\nブラウザのアドレスバー付近のカメラ設定で「許可」にして、もう一度「はじめる」を押してください。");
+    else if(n==="NotFoundError"||n==="OverconstrainedError") showErr("カメラが見つかりません。カメラが接続されているか確認してください。");
+    else if(n==="NotReadableError") showErr("カメラが他のアプリ(Zoom・Teamsなど)で使用中です。そのアプリを閉じてから押してください。");
+    else showErr("カメラを起動できませんでした。("+(n||"")+" "+(e&&e.message||"")+")");
+  }
+};
+})();
+</script>
+</body>
+</html>
